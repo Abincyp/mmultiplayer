@@ -7,7 +7,12 @@ public:
 	static const int Port = 5222;
 
 	bool Initialize();
+	void DebugConsole();
 	std::string GetName();
+
+	static void AddChatMessageNS(std::string message);
+
+	static bool SendJsonMessageNS(json msg);
 
 	typedef struct {
 		unsigned int Id;
@@ -33,4 +38,6 @@ public:
 		float MaxZ;
 		PACKET LastPacket;
 	};
+
+	static Client::Player GetLocalClient();
 };

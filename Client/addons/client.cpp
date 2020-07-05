@@ -3,6 +3,12 @@
 static char roomInput[0xFF] = { 0 };
 static char nameInput[0xFF] = { 0 };
 static char chatInput[0x200] = { 0 };
+static char consoleInput[0x200] = { 0 };
+
+//I'll place it here for now
+static char HostCommand[9] = "/getHost";
+
+void SendConsoleInput();
 
 static auto connected = false, loading = false;
 static std::string room;
@@ -17,6 +23,17 @@ static struct {
 	unsigned long long LastTime;
 	std::mutex Mutex;
 } chat;
+
+//Old PTP MP Maps
+static std::string LegacyMaps[] = { "ptp_stormdrainb02_p", "ptp_stormdrainb03_p", "ptp_scrapera01_p", "ptp_residentiala01_p", "ptp_b384_p"};
+
+static struct {
+	bool Focused = false, ShowOverlay = true;
+	int Keybind = 0;
+	std::string Raw;
+	unsigned long long LastTime;
+	std::mutex Mutex;
+} console;
 
 static Client::Player client = { 0 };
 
@@ -70,6 +87,99 @@ static bool Setup() {
 	return true;
 }
 
+std::wstring stringToWString(const std::string& t_str) {
+	typedef std::codecvt_utf8<wchar_t> convert_type;
+	std::wstring_convert<convert_type, wchar_t> converter;
+
+	return converter.from_bytes(t_str);
+
+}
+
+static void SetRes() {
+	/*auto* console = Engine::GetConsole();
+	std::wstring command = L"1280x720w";
+	console->ConsoleCommand(command.c_str());*/
+	std::wstring command = L"setres 1280x720w";
+	Engine::ExecuteCommand(command.c_str());
+	printf("SetRes success\n");
+}
+
+static void StartUp() {
+	std::wstring command = L"start PTP_StormdrainB02_p?LoadCheckpoint=Start";
+	Engine::ExecuteCommand(command.c_str());
+}
+
+static void SetMesh() {
+	auto player = Engine::GetPlayerPawn();
+	auto meshUpper = Engine::GetPlayerPawn()->Mesh1p;
+	std::string REF = meshUpper->GetFullName();
+	printf(("Full Internal Reference for SK Mesh Component: '" + REF + "'\n").c_str());
+	auto meshLower = Engine::GetPlayerPawn()->Mesh1pLowerBody;
+
+	auto meshPlayer = Engine::GetPlayerPawn()->Mesh3p;
+	//void SetSkeletalMesh(class USkeletalMesh* NewMesh, bool bKeepSpaceBases);
+	//Classes::UTdSkeletalMeshComponent* AltMeshUpper;
+
+	//Classes::UTdSkeletalMeshComponent* AltMeshUpper = player->Spawn(Classes::UTdSkeletalMeshComponent::StaticClass(), 0, 0, { 0 }, { 0 }, 0, true);
+	auto actor = static_cast<Classes::ASkeletalMeshActorSpawnable*>(player->Spawn(Classes::ASkeletalMeshActorSpawnable::StaticClass(), 0, 0, { 0 }, { 0 }, 0, true));
+
+	//AltMeshUpper->SkeletalMesh = static_cast<Classes::USkeletalMesh*>(actor->STATIC_DynamicLoadObject(L"CH_TKY_Cop_Pursuit_1p.SK_UpperBody", Classes::USkeletalMesh::StaticClass(), false));
+
+	meshUpper->SetSkeletalMesh(static_cast<Classes::USkeletalMesh*>(actor->STATIC_DynamicLoadObject(L"CH_TKY_Cop_Pursuit_1p.SK_UpperBody", Classes::USkeletalMesh::StaticClass(), false)), false);
+
+	//meshUpper = AltMeshUpper;
+	meshLower->SetSkeletalMesh(static_cast<Classes::USkeletalMesh*>(actor->STATIC_DynamicLoadObject(L"CH_TKY_Cop_Pursuit_1p.SK_LowerBody", Classes::USkeletalMesh::StaticClass(), false)), false);
+
+	meshPlayer->SetSkeletalMesh(static_cast<Classes::USkeletalMesh*>(actor->STATIC_DynamicLoadObject(L"CH_TKY_Cop_Pursuit.SK_TKY_Cop_Pursuit", Classes::USkeletalMesh::StaticClass(), false)), false);
+
+	//Set mat upper
+	std::wstring materialUpper = L"MaterialInstanceConstant'CH_TKY_Cop_Pursuit_1P.MI_Pursuit_1P_blue'";
+	std::wstring materialLower = L"MaterialInstanceConstant'CH_TKY_Cop_Pursuit.MI_TKY_Cop_Pursuit'";
+	meshUpper->SetMaterial(0, static_cast<Classes::UMaterialInterface*>(actor->STATIC_DynamicLoadObject(materialUpper.c_str(), Classes::UMaterialInterface::StaticClass(), false)));
+	meshLower->SetMaterial(0, static_cast<Classes::UMaterialInterface*>(actor->STATIC_DynamicLoadObject(materialLower.c_str(), Classes::UMaterialInterface::StaticClass(), false)));
+	meshPlayer->SetMaterial(0, static_cast<Classes::UMaterialInterface*>(actor->STATIC_DynamicLoadObject(materialLower.c_str(), Classes::UMaterialInterface::StaticClass(), false)));
+
+	player->DisableHairRagdoll();
+	player->Init1P();
+	player->Init1pArms();
+	player->SetFirstPerson(true);
+	std::wstring playerWeapon = L"TdWeapon_Pistol_BerettaM93R";
+
+	/*auto APlayerWep = static_cast<Classes::AWeapon*>(player->Spawn(Classes::ATdWeapon_Light::StaticClass(), 0, 0, { 0 }, { 0 }, 0, true));
+	//APlayerWep->;
+
+	player->SetWeapon(APlayerWep);*/
+	//static auto* Classes::UCheatManager.StaticClass();
+	//Engine::GetPlayerController()->CheatManager->GiveWeapon(playerWeapon.c_str());
+}
+
+static char* GetFormattedTime() {
+
+	SYSTEMTIME time;
+	GetLocalTime(&time);
+
+	char formattedTime[0xFF];
+	sprintf_s(formattedTime, sizeof(formattedTime), "%d:%02d: ", time.wHour, time.wMinute);
+	return formattedTime;
+}
+
+static boolean MessageIsKismet(std::string InputMessage) {
+	printf_s((GetFormattedTime() + InputMessage + "\n").c_str());
+
+	//Get rid of name in the message body.
+	std::string messageStripped = InputMessage.substr(InputMessage.find(":") + 1);
+
+	if (messageStripped.substr(0, 14) == " KismetMsg_KE ") {
+		printf_s("Kismet Command Received, executing.\n");
+		messageStripped = messageStripped.substr(14, messageStripped.size());
+		Engine::ExecuteCommand(stringToWString("ce "+ messageStripped).c_str());
+		return true;
+	}
+
+	printf_s(("Raw Message Body:"+messageStripped + "\n").c_str());
+	return false;
+}
+
 static bool RecvJsonMessage(json &msg) {
 	static char buffer[0xFFF] = { 0 };
 	static char *nextMessage = nullptr;
@@ -116,16 +226,24 @@ static bool SendJsonMessage(json msg) {
 	return true;
 }
 
+bool Client::SendJsonMessageNS(json msg) {
+	msg["id"] = client.Id;
+	if (msg["id"] != NULL) {
+		return SendJsonMessage(msg);
+	}
+	return false;
+}
+
+Client::Player Client::GetLocalClient() {
+	return client;
+}
+
 static void AddChatMessage(std::string message) {
 	static const auto maxMessages = 100;
 
-	SYSTEMTIME time;
-	GetLocalTime(&time);
+	
 
-	char formattedTime[0xFF];
-	sprintf_s(formattedTime, sizeof(formattedTime), "%d:%02d: ", time.wHour, time.wMinute);
-
-	auto formattedMsg = formattedTime + message + "\n";
+	auto formattedMsg = GetFormattedTime() + message + "\n";
 
 	chat.Mutex.lock();
 
@@ -139,17 +257,54 @@ static void AddChatMessage(std::string message) {
 	chat.Mutex.unlock();
 }
 
+void TestTab() {
+	ImGui::Text("Console test");
+
+	if (ImGui::Button("Setres##test")) {
+		SetRes();
+	}
+
+	if (ImGui::Button("SetMesh##test")) {
+		SetMesh();
+	}
+
+	ImGui::Text("Console");
+
+	if (ImGui::InputText("##client-console-input", consoleInput, sizeof(consoleInput), ImGuiInputTextFlags_EnterReturnsTrue)) {
+		SendConsoleInput();
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button("Send##client-chat-send")) {
+		SendConsoleInput();
+	}
+}
+
+void SendConsoleInput() {
+	if (consoleInput != NULL) {
+		Engine::ExecuteCommand(stringToWString(consoleInput).c_str());
+		consoleInput[0] = 0;
+	}
+}
+
 static void SendChatInput() {
 	if (connected) {
 		for (auto c = &chatInput[0]; *c; ++c) {
 			if (!isblank(*c)) {
-				SendJsonMessage({
-					{ "type", "chat" },
-					{ "id", client.Id },
-					{ "body", chatInput },
-				});
+				if (std::string(chatInput).compare(HostCommand) == 0) {
+					printf_s("System: Host acquired.");
+					Engine::ExecuteCommand(L"ce mphost");
+					break;
+				}
+				else {
+					SendJsonMessage({
+						{ "type", "chat" },
+						{ "id", client.Id },
+						{ "body", chatInput },
+						});
 
-				break;
+					break;
+				}
 			}
 		}
 	}
@@ -231,7 +386,7 @@ static bool Join() {
 		client.Level = std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>().to_bytes(world->GetMapName(false).c_str());
 		std::transform(client.Level.begin(), client.Level.end(), client.Level.begin(), [](char c) {
 			return tolower(c);
-		});
+			});
 
 		if (client.Level == "tdmainmenu") {
 			loading = true;
@@ -244,7 +399,7 @@ static bool Join() {
 		{ "name", client.Name },
 		{ "level", client.Level },
 		{ "character", client.Character },
-	})) {
+		})) {
 		printf("client: failed to send connect msg\n");
 		return false;
 	}
@@ -263,7 +418,7 @@ static bool Join() {
 	}
 
 	client.Id = msgId;
-
+	printf(("Client Info: [CL ID#" + std::to_string(client.Id) + "] [Room = " + room + "] [Level = " + client.Level + "]\n").c_str());
 	printf("client: joined with id %x\n", client.Id);
 	return true;
 }
@@ -377,14 +532,39 @@ static void ClientListener() {
 				}
 
 				players.Mutex.unlock_shared();
-			} else if (msgType == "chat") {
+			}
+			else if (msgType == "chat") {
 				auto msgBody = msg["body"];
+				auto msgId = msg["id"];
+				auto msgName = msg["name"];
+
 				if (!msgBody.is_string()) {
 					continue;
 				}
 
 				players.Mutex.lock_shared();
-				AddChatMessage(msgBody.get<std::string>());
+
+				if (msgId == NULL) {
+					printf("Error: msgID is NULL\n");
+				}
+
+				if (msg["level"].is_null()) {
+					printf_s("Error: Packet's 'level' is null!\n");
+				}
+
+				if (msg["id"].is_null()) {
+					printf_s("Error: Packet's 'id' is null!\n");
+				}
+
+				printf_s(msg["level"].is_string() ? (msg["level"].get<std::string>() + "\n").c_str() : "Error: Packet's 'level' is not a string!\n");
+				//printf(("Name = "+ msgName.get<std::string>() + " | Body = "+msgBody.get<std::string>() + "\n").c_str());
+
+				std::string ChatMessage = msgBody.get<std::string>();
+
+				if (!MessageIsKismet(ChatMessage)) {
+					AddChatMessage(ChatMessage);
+				}
+
 				players.Mutex.unlock_shared();
 			} else if (msgType == "level") {
 				auto msgId = msg["id"];
@@ -752,6 +932,11 @@ static void MultiplayerTab() {
 	players.Mutex.unlock_shared();
 }
 
+void Client::AddChatMessageNS(std::string message)
+{
+	AddChatMessage(message);
+}
+
 bool Client::Initialize() {
 	// Settings
 	client.Name = Settings::GetSetting("client", "name", "anonymous").get<std::string>();
@@ -767,8 +952,11 @@ bool Client::Initialize() {
 	players.ShowNameTags = Settings::GetSetting("client", "showNameTags", true);
 	chat.ShowOverlay = Settings::GetSetting("client", "showChatOverlay", true);
 
+
+
 	// Functions
 	Menu::AddTab("Multiplayer", MultiplayerTab);
+	Menu::AddTab("New Test", TestTab);
 	Engine::OnTick(OnTick);
 	Engine::OnRenderScene(OnRender);
 
@@ -778,6 +966,12 @@ bool Client::Initialize() {
 			Engine::BlockInput(true);
 		}
 	});
+
+	//Set resolution (TESTING)
+	//Classes::UTdConsole console = Engine::GetConsole()->ConsoleCommand(L"SetRes 1280x720w");
+	SetRes();
+	StartUp();
+	DebugConsole();
 
 	Engine::OnSuperInput([](unsigned int &msg, int keycode) {
 		if (chat.Focused) {
@@ -852,6 +1046,17 @@ bool Client::Initialize() {
 			players.Mutex.unlock_shared();
 		}
 
+		for (const std::string& Map : LegacyMaps) {
+			if (client.Level == Map) {
+				std::string LegacyMapMessage = "System: This is a legacy map. In order to claim host you need to type in '/getHost' in the chat.\n";
+				printf_s(LegacyMapMessage.c_str());
+				AddChatMessage(LegacyMapMessage);
+			}
+			else {
+				printf_s(("Loaded level=" + client.Level + "\n").c_str());
+			}
+		}
+
 		if (connected) {
 			SendJsonMessage({
 				{ "type", "level" },
@@ -882,6 +1087,13 @@ bool Client::Initialize() {
 
 	std::thread(ClientListener).detach();
 	return true;
+}
+
+void Client::DebugConsole() {
+	AllocConsole();
+	static_cast<VOID>(freopen("CONIN$", "r", stdin));
+	static_cast<VOID>(freopen("CONOUT$", "w", stdout));
+	static_cast<VOID>(freopen("CONOUT$", "w", stderr));
 }
 
 std::string Client::GetName() {
