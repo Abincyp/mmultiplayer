@@ -1,4 +1,51 @@
 #include "stdafx.h"
+#include "addons/client.h"
+
+static DWORD SendKismetMessage = 0;
+static DWORD host_pid = 0;
+void** (__thiscall* ExecuteCommandOriginal)(int, void**, int, int);
+
+std::string WideStringToString(std::wstring wstr) {
+	if (wstr.empty()) {
+		return std::string();
+	}
+
+#if deined WIN32
+	int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], wstr.size(), NULL, 0, NULL, NULL);
+	std::string ret = std::string(size, 0);
+	WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], wstr.size(), &ret[0], size, NULL, NULL)
+#else
+	size_t size = 0;
+	_locale_t lc = _create_locale(LC_ALL, "en_US.UTF-8");
+	errno_t err = _wcstombs_s_l(&size, NULL, 0, &wstr[0], _TRUNCATE, lc);
+	std::string ret = std::string(size, 0);
+	err = _wcstombs_s_l(&size, &ret[0], size, &wstr[0], _TRUNCATE, lc);
+	_free_locale(lc);
+	ret.resize(size - 1);
+#endif
+	return ret;
+}
+
+int ReadBuffer(HANDLE process, void* address, char* buffer, unsigned int size) {
+	ReadProcessMemory(process, address, buffer, size, (SIZE_T*)&size);
+	return size;
+}
+
+int ReadInt(HANDLE process, void* address) {
+	ReadBuffer(process, address, (char*)&address, sizeof(int));
+	return INT(address);
+}
+
+char* WCharToChar(char* dest, wchar_t* src) {
+	sprintf(dest, "%ws", src);
+
+	return dest;
+}
+
+int WriteBuffer(HANDLE process, void* address, char* buffer, unsigned int size) {
+	WriteProcessMemory(process, address, buffer, size, (SIZE_T*)&size);
+	return size;
+}
 
 // D3D9 and window hooks
 static struct {
@@ -75,6 +122,15 @@ static struct {
 	void(__thiscall *Original)(float *, int, float) = nullptr;
 } tick;
 
+boolean ReplaceString(std::string& str, const std::string& from, const std::string& to) {
+	size_t start_pos = str.find(from);
+	if (start_pos == std::string::npos) {
+		return false;
+	}
+	str.replace(start_pos, from.length(), to);
+	return true;
+}
+
 // D3D9 and window hook implementations
 LRESULT CALLBACK WndProcHook(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HRESULT WINAPI EndSceneHook(IDirect3DDevice9 *device) {
@@ -124,6 +180,59 @@ HRESULT WINAPI ResetHook(IDirect3DDevice9 *pDevice, D3DPRESENT_PARAMETERS *param
 	ImGui_ImplDX9_Init(pDevice);
 
 	return ret;
+}
+
+void** __fastcall ExecuteCommandHook(int this_, void* idle_, void** a2, int a3, int a4) {
+	if (a3 && ReadInt(GetCurrentProcess, (void*)(a3 + 4))) {
+		int length = ReadInt(GetCurrentProcess, (void*)(a3 + 4));
+		wchar_t* command = *(wchar_t**)a3;
+		printf_s("Command Executed (Hook): %ws\n", command);
+		std::wstring ProcessCommand = command;
+		if (ProcessCommand.substr(0, 5) == L"echo " || ProcessCommand.substr(0, 5) == L"Echo ") {
+			Client::AddChatMessageNS("Level Message: '" + WideStringToString(ProcessCommand.substr(5, ProcessCommand.size())) + "'");
+		}
+
+		if (ProcessCommand.substr(0, 10) == L"broadcast " || ProcessCommand.substr(0, 10) == L"Broadcast ") {
+			std::string BroadcastMessage = "Broadcast: '" + WideStringToString(ProcessCommand.substr(10, ProcessCommand.size())) + "'";
+			ReplaceString(BroadcastMessage, "{me}", Client::GetLocalClient().Name);
+			//Client::AddChatMessageNS(BroadcastMessage);
+
+			Client::SendJsonMessageNS({
+					{ "type", "chat" },
+					{ "id", Client::GetLocalClient().Id },
+					{ "body", BroadcastMessage },
+				});
+		}
+
+		if (ProcessCommand.substr(0, 10) == L"mpsend ce ") {
+			ProcessCommand = ProcessCommand.substr(10, ProcessCommand.size());
+			Client::SendJsonMessageNS({
+						{ "type", "chat" },
+						{ "id", Client::GetLocalClient().Id },
+						{ "body", "KismetMsg_KE "+ WideStringToString(ProcessCommand) },
+				});
+		}
+
+		if (length > 7 && SendKismetMessage && memcmp(command, L"mpsend ", 14) == 0) {
+			command = (wchar_t*)((DWORD)command + 14);
+			char* str = (char*)malloc(length + 1);
+			WCharToChar(str, command);
+
+			printf_s("Remote kismet command: %s\n", str);
+
+			HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, 0, host_pid);
+			if (process) {
+				LPVOID param = VirtualAllocEx(process, 0, length + 1, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+				WriteBuffer(process, param, str, length + 1);
+				CreateRemoteThread(process, 0, 0, (LPTHREAD_START_ROUTINE)SendKismetMessage, param, 0, 0);
+			}
+			CloseHandle(process);
+
+			free(str);
+		}
+	}
+
+	return ExecuteCommandOriginal(this_, a2, a3, a4);
 }
 
 void HandleMessage(HWND hWnd, UINT &msg, WPARAM wParam, LPARAM lParam) {
@@ -253,6 +362,8 @@ int PostDeathHook() {
 
 	return ret;
 }
+
+
 
 HMODULE WINAPI LoadLibraryAHook(const char *module) {
 	if (strstr(module, "menl_hooks.dll")) {
@@ -432,6 +543,11 @@ void __fastcall TickHook(float *scales, void *idle, int arg, float delta) {
 				commands.Mutex.lock();
 
 				for (auto &command : commands.Queue) {
+					if (command.substr(0,5) == L"echo " || command.substr(0, 5) == L"Echo ") {
+						Client::AddChatMessageNS("Level Message: '" + WideStringToString(command.substr(5, command.size())) + "'");
+					}
+
+					printf(("Command Executed: '" + WideStringToString(command) +"'\n").c_str());
 					console->ConsoleCommand(command.c_str());
 				}
 
@@ -853,6 +969,18 @@ bool Engine::Initialize() {
 		return false;
 	}
 
+	/*if (!(ptr = Pattern::FindPattern("\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x83\xEC\x28\x53\x55\x56\x57\xA1\x00\x00\x00\x00\x33\xC4\x50\x8D\x44\x24\x3C\x64\xA3\x00\x00\x00\x00\x89\x4C\x24\x18\x33\xDB\x89\x5C\x24\x14\x39\x99\xCC\x02\x00\x00", "xxx????xxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))) {
+		MessageBoxA(0, "Failed to find console commands", "Failure", MB_ICONERROR);
+		return false;
+	}*/
+
+	//if (!Hook::TrampolineHook(ExecuteCommandHook, ptr, reinterpret_cast<void**>(&executeCommand.Original)));
+	/*// 0xFA99D0
+	addr = (DWORD)FindPattern(module.modBaseAddr, module.modBaseSize, "\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x83\xEC\x28\x53\x55\x56\x57\xA1\x00\x00\x00\x00\x33\xC4\x50\x8D\x44\x24\x3C\x64\xA3\x00\x00\x00\x00\x89\x4C\x24\x18\x33\xDB\x89\x5C\x24\x14\x39\x99\xCC\x02\x00\x00", "xxx????xxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+	// *(DWORD *)&ExecuteCommandOriginal = addr;
+	TrampolineHook(ExecuteCommandHook, (void *)addr, (void **)&ExecuteCommandOriginal);
+	printf("execute command: 0x%x\n", addr);*/
+
 	if (!Hook::TrampolineHook(PostDeathHook, ptr, reinterpret_cast<void **>(&death.PostOriginal))) {
 		MessageBoxA(0, "Failed to hook PreDeath", "Failure", MB_ICONERROR);
 		return false;
@@ -901,6 +1029,12 @@ bool Engine::Initialize() {
 		MessageBoxA(0, "Failed to hook Tick", "Failure", MB_ICONERROR);
 		return false;
 	}
+
+	// 0xFA99D0
+	//Console
+	ptr = Pattern::FindPattern("\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x83\xEC\x28\x53\x55\x56\x57\xA1\x00\x00\x00\x00\x33\xC4\x50\x8D\x44\x24\x3C\x64\xA3\x00\x00\x00\x00\x89\x4C\x24\x18\x33\xDB\x89\x5C\x24\x14\x39\x99\xCC\x02\x00\x00", "xxx????xxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+	Hook::TrampolineHook(ExecuteCommandHook, ptr, (void**)&ExecuteCommandOriginal);
+	printf_s("execute command: 0x%x\n", ptr);
 
 	return true;
 }

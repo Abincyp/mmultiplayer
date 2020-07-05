@@ -4,6 +4,8 @@ static auto show = false, showPlayerInfo = false;
 static std::vector<MenuTab> tabs;
 static int showKeybind = 0;
 
+
+
 static void RenderMenu(IDirect3DDevice9 *device) {
 	if (show) {
 		ImGui::Begin("MMultiplayer");
