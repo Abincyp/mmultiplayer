@@ -1,6 +1,10 @@
 ﻿#include "stdafx.h"
+#include <windows.h>
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, char *, int) {
+
+	ShellExecute(NULL, L"open", L"mirrorsedge.exe", NULL, NULL, SW_SHOWDEFAULT);
+
 	if (!AdjustCurrentPrivilege(SE_DEBUG_NAME)) {
 		MessageBox(0, L"Failed to adjust privileges to debug", L"Failure", MB_OK);
 		return 1;
@@ -38,10 +42,6 @@ start:
 		}
 
 		auto path = GetDllPath();
-		if (URLDownloadToFile(nullptr, L"https://github.com/btbd/mmultiplayer/raw/master/Client/binary/Client.dll", path.c_str(), 0, nullptr) != S_OK && !PathFileExists(path.c_str())) {
-			MessageBox(0, L"Failed to download the latest version", L"Failure", 0);
-			status = 1;
-		}
 
 		auto argSize = (path.size() + 1) * sizeof(wchar_t);
 
@@ -104,7 +104,8 @@ std::wstring GetDllPath() {
 		exit(1);
 	}
 
-	return std::wstring(buffer) + L"mmultiplayer.dll";
+	//return std::wstring(buffer) + L"mmultiplayer.dll";
+	return L"mmultiplayer.dll";
 }
 
 PROCESSENTRY32 GetProcessInfoByName(const wchar_t *name) {
