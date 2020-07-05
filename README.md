@@ -1,12 +1,13 @@
-# Mirror's Edge Multiplayer Mod
+# Mirror's Edge Multiplayer Mod with Kismet Communication
 
-## Setup
+## About Fork
 
-1. Download the latest launcher from <a href="https://github.com/btbd/mmultiplayer/releases/latest">here</a>.
-2. Run the launcher either before Mirror's Edge or when Mirror's Edge is running.
-3. Press `Insert` to view the in-game menu where you can adjust settings as you please.
+This fork adds Kismet communication from 1.x into multiplayer 2.x.
 
-## Features
+This client also has a function to replace the player's local third person and first person mesh.
+The corresponding function can be activated by going into the "Test Tab" in the client and pressing the "SetMesh" button.
+
+## Features (From multiplayer source)
 
 - Full multiplayer client with custom names, rooms, and characters
 - General purpose engine and world menus
